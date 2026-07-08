@@ -20,10 +20,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
 
     # CORS
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",
-    ]
+    # Simple comma-separated string (no brackets/quotes needed in Render's UI).
+    # Example value to paste in Render: https://pathlight-beta.vercel.app,http://localhost:5173
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     # Stripe
     STRIPE_SECRET_KEY: str = ""
