@@ -76,13 +76,47 @@ def _clean_youtube_url(url: str) -> str:
     return url
 
 
+def _get_youtube_video_id(url: str) -> str | None:
+    match = re.search(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})", url or "")
+    return match.group(1) if match else None
+
+
+def _get_youtube_duration_via_page_scrape(video_id: str) -> int:
+    """
+    Fallback for when yt-dlp's metadata lookup gets blocked -- common on
+    cloud/datacenter IPs (e.g. Render), which YouTube treats as suspicious
+    and challenges with a bot check that yt-dlp can't get past on its own.
+
+    Makes a single plain HTTP GET to the watch page with a realistic
+    browser User-Agent and pulls "lengthSeconds" out of the embedded player
+    response JSON. One plain request is less likely to trip bot detection
+    than yt-dlp's multi-step extraction flow, though it's not guaranteed to
+    work every time either.
+    """
+    resp = http_requests.get(
+        f"https://www.youtube.com/watch?v={video_id}",
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    match = re.search(r'"lengthSeconds":"(\d+)"', resp.text)
+    if not match:
+        raise RuntimeError("lengthSeconds not found in watch page")
+    return int(match.group(1))
+
+
 def get_youtube_duration_seconds(youtube_url: str) -> int:
     """
-    Looks up a YouTube video's real duration without downloading anything --
-    yt-dlp's extract_info(download=False) just fetches page metadata, so this
-    is fast even for a multi-hour lecture. Used to populate duration_seconds
-    on lecture creation, which otherwise always defaulted to 0 since there's
-    no way for the instructor to know/enter it from a pasted link.
+    Looks up a YouTube video's real duration without downloading anything.
+    Tries yt-dlp first (works reliably from a home/residential IP); if that
+    fails -- as it does from most cloud hosts, since YouTube blocks
+    datacenter IPs -- falls back to a lightweight page-scrape that doesn't
+    trigger the same bot check as yt-dlp's extraction flow.
     """
     import yt_dlp
 
@@ -92,9 +126,20 @@ def get_youtube_duration_seconds(youtube_url: str) -> int:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
-        return int(info.get("duration") or 0)
+        duration = int(info.get("duration") or 0)
+        if duration:
+            return duration
     except Exception as e:
-        print(f"[get_youtube_duration_seconds] failed for {youtube_url}: {e}")
+        print(f"[get_youtube_duration_seconds] yt-dlp failed for {youtube_url}: {e}")
+
+    video_id = _get_youtube_video_id(clean_url)
+    if not video_id:
+        return 0
+
+    try:
+        return _get_youtube_duration_via_page_scrape(video_id)
+    except Exception as e:
+        print(f"[get_youtube_duration_seconds] page-scrape fallback also failed for {youtube_url}: {e}")
         return 0
 
 
@@ -261,12 +306,46 @@ def _transcribe_local_audio(client, types, audio_path, label):
         return _transcribe_audio_in_chunks(client, types, audio_path, label)
 
 
+def _fetch_youtube_captions(video_id: str) -> str:
+    """
+    Fetches YouTube's own (creator-provided or auto-generated) captions via
+    the youtube_transcript_api library, which talks to YouTube's lightweight
+    timedtext endpoint directly rather than scraping/downloading like yt-dlp
+    does. This is far less likely to trip YouTube's bot detection on
+    cloud/datacenter IPs (e.g. Render), so it's tried first for YouTube URLs.
+    Raises on failure (e.g. no captions available for this video) -- the
+    caller falls back to the audio-download + Gemini transcription pipeline.
+    """
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+    return " ".join(segment["text"] for segment in transcript_list if segment.get("text"))
+
+
 def transcribe_youtube_url(youtube_url: str) -> str:
-    """Downloads a YouTube video's audio track and transcribes it using Gemini."""
+    """
+    Gets a transcript for a YouTube video. Tries YouTube's own captions
+    first -- fast, no download, and much less likely to get blocked on a
+    cloud host. Falls back to downloading the audio track and transcribing
+    it with Gemini only if no captions are available for the video.
+    """
+    clean_url = _clean_youtube_url(youtube_url)
+    video_id = _get_youtube_video_id(clean_url)
+
+    if video_id:
+        try:
+            captions = _fetch_youtube_captions(video_id)
+            if captions.strip():
+                return captions
+        except Exception as e:
+            print(
+                f"[transcribe_youtube_url] no captions available for {youtube_url}, "
+                f"falling back to audio transcription: {e}"
+            )
+
     from google import genai
     from google.genai import types
 
-    clean_url = _clean_youtube_url(youtube_url)
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     audio_path = _download_youtube_audio(clean_url)
