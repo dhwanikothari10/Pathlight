@@ -24,6 +24,14 @@ realistic lecture, no chunking or Vertex-only params required.
 
 This requires ffmpeg to be installed and on PATH (used both by yt-dlp to
 extract audio from YouTube, and directly for uploaded video files).
+
+COOKIES — why yt-dlp calls pass a cookiefile:
+On cloud hosts (e.g. Render), YouTube treats the datacenter IP as suspicious
+and often blocks yt-dlp with a "Sign in to confirm you're not a bot" error,
+even though the exact same code works fine from a home/residential IP.
+Passing cookies from a real logged-in browser session works around this.
+YOUTUBE_COOKIES_FILE is optional -- when unset (e.g. local dev), yt-dlp runs
+exactly as before with no cookiefile passed.
 """
 
 import re
@@ -81,6 +89,18 @@ def _get_youtube_video_id(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _yt_dlp_cookie_opts() -> dict:
+    """
+    Returns {"cookiefile": path} if YOUTUBE_COOKIES_FILE is set and points to
+    a real file, otherwise {} (so local dev / no-cookie setups behave exactly
+    as before). Centralized here so every yt-dlp call site stays in sync.
+    """
+    cookies_path = getattr(settings, "YOUTUBE_COOKIES_FILE", "")
+    if cookies_path and os.path.exists(cookies_path):
+        return {"cookiefile": cookies_path}
+    return {}
+
+
 def _get_youtube_duration_via_page_scrape(video_id: str) -> int:
     """
     Fallback for when yt-dlp's metadata lookup gets blocked -- common on
@@ -113,15 +133,20 @@ def _get_youtube_duration_via_page_scrape(video_id: str) -> int:
 def get_youtube_duration_seconds(youtube_url: str) -> int:
     """
     Looks up a YouTube video's real duration without downloading anything.
-    Tries yt-dlp first (works reliably from a home/residential IP); if that
-    fails -- as it does from most cloud hosts, since YouTube blocks
-    datacenter IPs -- falls back to a lightweight page-scrape that doesn't
-    trigger the same bot check as yt-dlp's extraction flow.
+    Tries yt-dlp first (works reliably from a home/residential IP, and from
+    a cloud host too once a cookiefile is configured); if that fails, falls
+    back to a lightweight page-scrape that doesn't trigger the same bot
+    check as yt-dlp's extraction flow.
     """
     import yt_dlp
 
     clean_url = _clean_youtube_url(youtube_url)
-    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        **_yt_dlp_cookie_opts(),
+    }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -192,6 +217,7 @@ def _download_youtube_audio(youtube_url: str) -> str:
         ],
         "quiet": True,
         "no_warnings": True,
+        **_yt_dlp_cookie_opts(),
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -326,8 +352,9 @@ def transcribe_youtube_url(youtube_url: str) -> str:
     """
     Gets a transcript for a YouTube video. Tries YouTube's own captions
     first -- fast, no download, and much less likely to get blocked on a
-    cloud host. Falls back to downloading the audio track and transcribing
-    it with Gemini only if no captions are available for the video.
+    cloud host. Falls back to downloading the audio track (with cookies, if
+    configured) and transcribing it with Gemini only if no captions are
+    available for the video.
     """
     clean_url = _clean_youtube_url(youtube_url)
     video_id = _get_youtube_video_id(clean_url)

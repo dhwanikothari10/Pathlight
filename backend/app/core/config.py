@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # Frontend URL (used to build password-reset links)
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # YouTube cookies file (optional) — set on Render to a Secret File path
+    # (e.g. /etc/secrets/cookies.txt) to work around YouTube blocking
+    # datacenter IPs with a "Sign in to confirm you're not a bot" error.
+    # Left empty locally, so yt-dlp runs without a cookiefile in dev.
+    YOUTUBE_COOKIES_FILE: str = ""
+
     # SMTP (password reset emails)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
