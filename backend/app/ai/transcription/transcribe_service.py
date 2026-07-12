@@ -94,10 +94,20 @@ def _yt_dlp_cookie_opts() -> dict:
     Returns {"cookiefile": path} if YOUTUBE_COOKIES_FILE is set and points to
     a real file, otherwise {} (so local dev / no-cookie setups behave exactly
     as before). Centralized here so every yt-dlp call site stays in sync.
+
+    Logs which branch it took -- this is the fastest way to tell, from
+    Render's logs alone, whether a failed yt-dlp call is a cookies-not-found
+    problem (misconfigured env var / secret file path) versus a
+    cookies-present-but-still-blocked problem (expired/invalid cookies).
     """
     cookies_path = getattr(settings, "YOUTUBE_COOKIES_FILE", "")
     if cookies_path and os.path.exists(cookies_path):
+        print(f"[yt-dlp] using cookiefile at {cookies_path}")
         return {"cookiefile": cookies_path}
+    print(
+        f"[yt-dlp] no cookiefile in use (YOUTUBE_COOKIES_FILE={cookies_path!r}, "
+        f"exists={os.path.exists(cookies_path) if cookies_path else False})"
+    )
     return {}
 
 
@@ -341,11 +351,18 @@ def _fetch_youtube_captions(video_id: str) -> str:
     cloud/datacenter IPs (e.g. Render), so it's tried first for YouTube URLs.
     Raises on failure (e.g. no captions available for this video) -- the
     caller falls back to the audio-download + Gemini transcription pipeline.
+
+    Newer versions of youtube_transcript_api (1.x+) removed the old static
+    `YouTubeTranscriptApi.get_transcript(...)` method -- it now requires
+    creating an instance and calling `.fetch(...)` instead, which returns a
+    FetchedTranscript object (iterable of snippets with .text) rather than a
+    plain list of dicts.
     """
     from youtube_transcript_api import YouTubeTranscriptApi
 
-    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-    return " ".join(segment["text"] for segment in transcript_list if segment.get("text"))
+    ytt_api = YouTubeTranscriptApi()
+    fetched_transcript = ytt_api.fetch(video_id)
+    return " ".join(snippet.text for snippet in fetched_transcript if snippet.text)
 
 
 def transcribe_youtube_url(youtube_url: str) -> str:
