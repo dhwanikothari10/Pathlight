@@ -91,24 +91,31 @@ def _get_youtube_video_id(url: str) -> str | None:
 
 def _yt_dlp_cookie_opts() -> dict:
     """
-    Returns {"cookiefile": path} if YOUTUBE_COOKIES_FILE is set and points to
-    a real file, otherwise {} (so local dev / no-cookie setups behave exactly
-    as before). Centralized here so every yt-dlp call site stays in sync.
+    Returns {"cookiefile": path} pointing at a *writable* copy of the cookies
+    file, or {} if no cookies are configured.
 
-    Logs which branch it took -- this is the fastest way to tell, from
-    Render's logs alone, whether a failed yt-dlp call is a cookies-not-found
-    problem (misconfigured env var / secret file path) versus a
-    cookies-present-but-still-blocked problem (expired/invalid cookies).
+    Render's Secret Files are mounted read-only, but yt-dlp needs write
+    access to the cookiefile -- it rewrites it after use to persist refreshed
+    cookie values. Using the read-only path directly fails with
+    "[Errno 30] Read-only file system". So on first use we copy the secret
+    file once into /tmp (writable) and use that copy from then on.
     """
     cookies_path = getattr(settings, "YOUTUBE_COOKIES_FILE", "")
-    if cookies_path and os.path.exists(cookies_path):
-        print(f"[yt-dlp] using cookiefile at {cookies_path}")
-        return {"cookiefile": cookies_path}
-    print(
-        f"[yt-dlp] no cookiefile in use (YOUTUBE_COOKIES_FILE={cookies_path!r}, "
-        f"exists={os.path.exists(cookies_path) if cookies_path else False})"
-    )
-    return {}
+    if not cookies_path or not os.path.exists(cookies_path):
+        print(
+            f"[yt-dlp] no cookiefile in use (YOUTUBE_COOKIES_FILE={cookies_path!r}, "
+            f"exists={os.path.exists(cookies_path) if cookies_path else False})"
+        )
+        return {}
+
+    writable_path = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
+    if not os.path.exists(writable_path):
+        import shutil
+        shutil.copyfile(cookies_path, writable_path)
+        print(f"[yt-dlp] copied cookiefile from {cookies_path} to writable path {writable_path}")
+
+    print(f"[yt-dlp] using cookiefile at {writable_path}")
+    return {"cookiefile": writable_path}
 
 
 def _get_youtube_duration_via_page_scrape(video_id: str) -> int:
