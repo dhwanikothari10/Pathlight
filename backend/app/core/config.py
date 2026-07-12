@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     # Vector store (Chroma persists to disk at this path)
     CHROMA_PERSIST_DIR: str = "./chroma_data"
 
+    # Frontend URL (used to build password-reset links)
+    FRONTEND_URL: str = "http://localhost:5173"
+
+    # SMTP (password reset emails)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "noreply@pathlight.app"
+    SMTP_FROM_NAME: str = "PathLight"
+
     class Config:
         env_file = ".env"
         case_sensitive = True

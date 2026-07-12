@@ -21,6 +21,10 @@ class User(Base):
     role = Column(Enum(UserRole), default=UserRole.student, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Password reset
+    reset_token = Column(String, nullable=True, index=True)
+    reset_token_expires = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     courses_created = relationship("Course", back_populates="instructor", foreign_keys="Course.instructor_id")
     enrollments = relationship("Enrollment", back_populates="student")
